@@ -1,6 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import Stopwatch from './components/Stopwatch'
 import Timer from './components/Timer'
+import History from './components/History'
+import { LS_HISTORY, MIN_SESSION_MS, makeSession, totalForToday } from './lib/history'
 
 // ─── localStorage helpers ────────────────────────────────────────────────────
 
@@ -53,6 +55,7 @@ export default function App() {
   const [tab, setTab] = useState(() => loadFromStorage(LS_TAB, 'stopwatches'))
   const [stopwatches, setStopwatches] = useState(() => loadFromStorage(LS_STOPWATCHES, []))
   const [timers, setTimers] = useState(() => loadFromStorage(LS_TIMERS, []))
+  const [sessions, setSessions] = useState(() => loadFromStorage(LS_HISTORY, []))
 
   // Unique ID counter – derive from existing data to avoid collisions after reload
   const [swCounter, setSwCounter] = useState(() => {
@@ -67,7 +70,25 @@ export default function App() {
   // Persist whenever state changes
   useEffect(() => { saveToStorage(LS_STOPWATCHES, stopwatches) }, [stopwatches])
   useEffect(() => { saveToStorage(LS_TIMERS, timers) }, [timers])
+  useEffect(() => { saveToStorage(LS_HISTORY, sessions) }, [sessions])
   useEffect(() => { saveToStorage(LS_TAB, tab) }, [tab])
+
+  // ── History ─────────────────────────────────────────────────────────────────
+
+  /** Record one completed run (start → pause/reset/delete) against a task. */
+  const logSession = useCallback((taskId, taskName, start, end) => {
+    if (!start || end - start < MIN_SESSION_MS) return
+    setSessions(prev => [...prev, makeSession(taskId, taskName, start, end)])
+  }, [])
+
+  const clearHistory = useCallback(() => setSessions([]), [])
+
+  /** taskId → ms already logged today, for the per-card "Today" line. */
+  const todayByTask = useMemo(() => {
+    const map = {}
+    for (const sw of stopwatches) map[sw.id] = totalForToday(sessions, sw.id)
+    return map
+  }, [sessions, stopwatches])
 
   // ── Stopwatch CRUD ──────────────────────────────────────────────────────────
 
@@ -155,6 +176,14 @@ export default function App() {
           >
             Timers
           </TabButton>
+          <TabButton
+            active={tab === 'history'}
+            onClick={() => setTab('history')}
+            color="emerald"
+            count={sessions.length}
+          >
+            History
+          </TabButton>
         </div>
       </header>
 
@@ -177,8 +206,10 @@ export default function App() {
                   <Stopwatch
                     key={sw.id}
                     data={sw}
+                    todayMs={todayByTask[sw.id] ?? 0}
                     onUpdate={updateStopwatch}
                     onDelete={() => deleteStopwatch(sw.id)}
+                    onLogSession={(start, end) => logSession(sw.id, sw.name, start, end)}
                   />
                 ))}
                 <AddCard onClick={addStopwatch} label="+ Add Stopwatch" color="indigo" />
@@ -213,6 +244,14 @@ export default function App() {
             )}
           </>
         )}
+
+        {tab === 'history' && (
+          <History
+            sessions={sessions}
+            stopwatches={stopwatches}
+            onClear={clearHistory}
+          />
+        )}
       </main>
 
       {/* Footer */}
@@ -225,27 +264,30 @@ export default function App() {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function TabButton({ active, onClick, children, color, count }) {
-  const colors = {
-    indigo: active
-      ? 'text-indigo-400 border-b-2 border-indigo-500'
-      : 'text-gray-500 hover:text-gray-300 border-b-2 border-transparent',
-    violet: active
-      ? 'text-violet-400 border-b-2 border-violet-500'
-      : 'text-gray-500 hover:text-gray-300 border-b-2 border-transparent',
-  }
+const TAB_ACTIVE = {
+  indigo: 'text-indigo-400 border-b-2 border-indigo-500',
+  violet: 'text-violet-400 border-b-2 border-violet-500',
+  emerald: 'text-emerald-400 border-b-2 border-emerald-500',
+}
 
+const TAB_BADGE = {
+  indigo: 'bg-indigo-500/20 text-indigo-400',
+  violet: 'bg-violet-500/20 text-violet-400',
+  emerald: 'bg-emerald-500/20 text-emerald-400',
+}
+
+function TabButton({ active, onClick, children, color, count }) {
   return (
     <button
       onClick={onClick}
-      className={`px-4 py-3 text-sm font-semibold transition-colors flex items-center gap-2 ${colors[color]}`}
+      className={`px-4 py-3 text-sm font-semibold transition-colors flex items-center gap-2 ${
+        active ? TAB_ACTIVE[color] : 'text-gray-500 hover:text-gray-300 border-b-2 border-transparent'
+      }`}
     >
       {children}
       {count > 0 && (
         <span className={`text-xs px-1.5 py-0.5 rounded-full ${
-          active
-            ? color === 'indigo' ? 'bg-indigo-500/20 text-indigo-400' : 'bg-violet-500/20 text-violet-400'
-            : 'bg-gray-800 text-gray-500'
+          active ? TAB_BADGE[color] : 'bg-gray-800 text-gray-500'
         }`}>
           {count}
         </span>
